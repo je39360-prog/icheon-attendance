@@ -338,10 +338,11 @@ input:focus,select:focus{border-color:var(--blu)}
       <button onclick="document.getElementById('qr-ov').classList.remove('on')" style="background:transparent;border:none;font-size:22px;color:var(--txt2);cursor:pointer;line-height:1">✕</button>
     </div>
     <div style="font-size:12px;color:var(--txt2);margin-bottom:16px">카메라로 스캔하면 바로 출석 체크 가능</div>
-    <!-- QR 이미지 -->
+    <!-- QR 코드 -->
     <div style="display:flex;justify-content:center;margin-bottom:16px">
       <div style="padding:14px;background:white;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.1);display:inline-block">
-        <img id="qr-img" style="width:200px;height:200px;display:block" alt="QR코드">
+        <div id="qr-div" style="width:220px;height:220px;display:flex;align-items:center;justify-content:center"></div>
+        <canvas id="qr-canvas" style="display:none"></canvas>
       </div>
     </div>
     <div style="background:var(--bg);border-radius:10px;padding:10px 14px;margin-bottom:16px">
@@ -378,6 +379,7 @@ input:focus,select:focus{border-color:var(--blu)}
 
 <script>
 const ADMIN_PW='0743';
+console.log('✅ 이천물류 출석 앱 v4 로드 완료');
 const CUTOFF={h:6,m:50};
 const GAS='https://script.google.com/macros/s/AKfycbwmT898-eltGfNOz7o_6Fl8NiOPjVlAWisys4ie2FZtzLxF4bM__zvJpvB5yao7uIlM/exec';
 const TC=['#1e88e5','#10b981','#8b5cf6','#f59e0b','#ec4899','#14b8a6','#f97316','#6366f1'];
@@ -938,30 +940,46 @@ function exportCSV(){
   a.download='이천물류_출석_'+monthLabel+'_'+today+'.csv';a.click();
 }
 
-// ── QR코드 ──
+// ── QR코드 (Canvas 직접 생성) ──
 const QR_URL = 'https://je39360-prog.github.io/icheon-attendance/';
 
 function showQR(){
-  // Google Charts QR API 사용
-  const qrSrc = 'https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=' + encodeURIComponent(QR_URL) + '&choe=UTF-8';
-  document.getElementById('qr-img').src = qrSrc;
   document.getElementById('qr-ov').classList.add('on');
+  const div = document.getElementById('qr-div');
+  div.innerHTML = '<div style="color:#aaa;font-size:13px">로딩 중...</div>';
+  if(window.QRCode){
+    div.innerHTML = '';
+    new QRCode(div, {text:QR_URL, width:220, height:220, colorDark:'#000', colorLight:'#fff', correctLevel:QRCode.CorrectLevel.H});
+  } else {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload = ()=>{
+      div.innerHTML = '';
+      new QRCode(div, {text:QR_URL, width:220, height:220, colorDark:'#000', colorLight:'#fff', correctLevel:QRCode.CorrectLevel.H});
+    };
+    s.onerror = ()=>{
+      div.innerHTML = "<div style='color:#ef4444;font-size:13px;padding:20px'>QR코드 로드 실패<br>인터넷 연결을 확인해주세요</div>";
+    };
+    document.head.appendChild(s);
+  }
 }
 
 function downloadQR(){
-  const img = document.getElementById('qr-img');
+  const img = document.querySelector('#qr-div img, #qr-div canvas');
+  if(!img){ toast('QR코드를 먼저 열어주세요'); return; }
   const a = document.createElement('a');
-  a.href = img.src;
+  if(img.tagName==='CANVAS') a.href = img.toDataURL('image/png');
+  else a.href = img.src;
   a.download = '이천물류_출석체크_QR.png';
-  a.target = '_blank';
   a.click();
 }
+
 
 // ── 초기화 ──
 loadAll();
 
 if('serviceWorker' in navigator){
-  const sw=`const C='att-v3';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(['/'])));self.skipWaiting();});self.addEventListener('fetch',e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));});`;
+  const sw=`const C='att-v4';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(['/'])));self.skipWaiting();});self.addEventListener('fetch',e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));});`;
   navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
 }
 </script>
