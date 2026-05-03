@@ -366,11 +366,14 @@ input:focus,select:focus{border-color:var(--blu)}
 
 <!-- 대리출석 차단 팝업 -->
 <div class="rov" id="block-ov">
-  <div class="rcard">
-    <div style="font-size:50px;margin-bottom:10px">🚫</div>
-    <div style="font-size:18px;font-weight:700;color:var(--red)">대리 출석 불가</div>
-    <div id="block-msg" style="font-size:14px;color:var(--txt2);margin-top:8px;line-height:1.65"></div>
-    <button class="btn brd" onclick="document.getElementById('block-ov').classList.remove('on')" style="margin-top:18px;border-radius:12px">확인</button>
+  <div class="rcard" style="border:2px solid #ef4444">
+    <div style="font-size:52px;margin-bottom:10px">🚫</div>
+    <div style="font-size:19px;font-weight:700;color:#ef4444">대리 출석 차단</div>
+    <div id="block-msg" style="font-size:14px;color:var(--txt2);margin-top:10px;line-height:1.7;text-align:center"></div>
+    <div style="background:#fef2f2;border-radius:10px;padding:10px;margin-top:14px;font-size:12px;color:#ef4444">
+      🔴 이 시도는 관리자에게 기록됩니다
+    </div>
+    <button class="btn brd" onclick="document.getElementById('block-ov').classList.remove('on')" style="margin-top:14px;border-radius:12px">확인</button>
   </div>
 </div>
 
@@ -477,25 +480,51 @@ async function doCheck(){
   const today=todayKey();
   if(!attendance[today])attendance[today]={};
   if(attendance[today][emp.id]){showRes('already',emp.name,attendance[today][emp.id]);document.getElementById('plate-inp').value='';return;}
+
   // 기기 인증
   loading(true);
-  let ok=true;
+  let authOk=true, blockReason='', blockOwner='';
   try{
-    const info=await api({action:'getDevice',empId:emp.id});
-    if(info&&info.deviceId){
-      if(info.deviceId!==DID)ok=false;
-    }else{
+    // 현재 기기(DID)가 기기 시트에 누구로 등록돼 있는지 확인
+    const deviceOwner=await api({action:'getDeviceOwner',deviceId:DID});
+    if(deviceOwner && deviceOwner.empId){
+      if(deviceOwner.empId !== emp.id){
+        // ❌ 다른 사람 기기로 출석 시도 → 대리출석!
+        authOk=false; blockReason='proxy'; blockOwner=deviceOwner.name;
+        try{
+          await api({action:'logProxy',date:today,deviceId:DID,
+            ownerName:deviceOwner.name,tryName:emp.name,
+            tryPlate:val,time:new Date().toTimeString().slice(0,5)});
+        }catch(e){}
+      }
+      // ✅ 본인 기기 맞음 → 통과
+    } else {
+      // 새 기기 → 이 직원 기기로 등록
       const di=`${navigator.platform||'Unknown'} / ${(navigator.userAgent.match(/(iPhone|iPad|Android|Windows|Mac)/)||['Unknown'])[0]} / ${new Date().toLocaleString('ko-KR')}`;
-      await api({action:'registerDevice',empId:emp.id,name:emp.name,deviceId:DID,deviceInfo:di});
+      toast('📍 위치 확인 중...');
+      let locStr='위치정보 없음';
+      try{
+        const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:8000,enableHighAccuracy:true}));
+        locStr=`위도:${pos.coords.latitude.toFixed(6)}, 경도:${pos.coords.longitude.toFixed(6)}, 정확도:${Math.round(pos.coords.accuracy)}m`;
+      }catch(gpsErr){locStr=gpsErr.code===1?'위치권한 거부':'위치정보 수집 실패';}
+      await api({action:'registerDevice',empId:emp.id,name:emp.name,deviceId:DID,deviceInfo:di,location:locStr});
       toast('✅ 기기 등록 완료');
     }
-  }catch(e){}
+  }catch(e){console.error('기기인증 오류:',e);}
   loading(false);
-  if(!ok){
-    document.getElementById('block-msg').innerHTML=emp.name+'님은 다른 기기에<br>등록되어 있습니다.<br>본인 기기에서만 출석 가능합니다.';
+
+  if(!authOk){
+    let msg='';
+    if(blockReason==='proxy'){
+      msg='<b style="color:#ef4444">⚠️ 대리 출석 감지!</b><br><br>이 기기는 <b>'+blockOwner+'</b>님의<br>등록 기기입니다.<br><br>'+emp.name+'님은 본인 기기에서만<br>출석 체크 가능합니다.<br><br><span style="font-size:11px;color:#aaa">이 시도는 기록됩니다.</span>';
+    }else{
+      msg='본인 기기에서만 출석 가능합니다.';
+    }
+    document.getElementById('block-msg').innerHTML=msg;
     document.getElementById('block-ov').classList.add('on');
     document.getElementById('plate-inp').value='';return;
   }
+
   const now=new Date(),timeStr=now.toTimeString().slice(0,5);
   const st=getSt(timeStr);
   const label=st==='ok'?'출석':st==='late'?'지각':'결석';
@@ -507,481 +536,4 @@ async function doCheck(){
   catch(e){toast('서버 저장 실패');}
 }
 
-// ── 팀별 미참석 ──
-function renderTeamAbs(){
-  const att=attendance[todayKey()]||{};
-  const td={};
-  employees.forEach(e=>{
-    const t=e.team||'미지정';
-    if(!td[t])td[t]={total:0,checked:0,absent:[]};
-    td[t].total++;
-    const st=getSt(att[e.id]);
-    if(st==='ok'||st==='late')td[t].checked++;
-    else if(!isLA(e.id))td[t].absent.push(e.name);
-  });
-  document.getElementById('abs-time').textContent='기준: '+new Date().toTimeString().slice(0,5);
-  const entries=Object.entries(td);
-  document.getElementById('team-abs').innerHTML=entries.length?entries.map(([name,d],i)=>{
-    const c=TC[i%TC.length],absN=d.absent.length;
-    const names=d.absent.slice(0,3).join(', ')+(d.absent.length>3?' 외 '+(d.absent.length-3)+'명':'');
-    return `<div style="border-radius:12px;padding:11px 13px;background:var(--sur);border-left:4px solid ${c};margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.05)">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:center;gap:7px">
-          <span style="font-size:14px;font-weight:600;color:var(--txt)">${name}</span>
-          <span style="font-size:11px;background:${c}22;color:${c};padding:2px 8px;border-radius:10px;font-weight:600">${d.checked}/${d.total}명</span>
-        </div>
-        ${absN>0?`<span class="bdg babs">미참 ${absN}명</span>`:`<span class="bdg bok">✓ 완료</span>`}
-      </div>
-      ${absN>0?`<div style="font-size:11px;color:var(--txt3);margin-top:5px">${names}</div>`:''}
-    </div>`;
-  }).join(''):'<div class="empty">직원 데이터 없음</div>';
-}
-
-// ── 관리자 ──
-function adminLogin(){
-  const pw=document.getElementById('admin-pw').value;
-  console.log('로그인 시도, 입력값 길이:',pw.length);
-  if(pw===ADMIN_PW){
-    console.log('로그인 성공');
-    go('s-admin');
-    switchTab('today');
-  }else{
-    toast('비밀번호가 틀렸습니다');
-  }
-}
-function adminLogout(){go('s-home');document.getElementById('admin-pw').value='';}
-
-function switchTab(name){
-  ['today','employees','stats','longabs','chart'].forEach(n=>{
-    document.getElementById('tab-'+n).classList.toggle('on',n===name);
-    const b=document.getElementById('tbtn-'+n);if(b)b.classList.toggle('on',n===name);
-  });
-  const T={today:'오늘 현황',employees:'직원 관리',stats:'통계',longabs:'장기결석 관리',chart:'그래프 대시보드'};
-  document.getElementById('admin-title').textContent=T[name];
-  if(name==='today')renderToday('');
-  if(name==='employees')renderEmps('');
-  if(name==='stats')renderStats();
-  if(name==='longabs')renderLongAbsTab();
-  if(name==='chart')renderCharts();
-}
-
-// ── 오늘 현황 ──
-function renderToday(q){
-  const att=attendance[todayKey()]||{};
-  let tok=0,tlate=0,tabs=0;
-  const ok=[],late=[],abs=[];
-  employees.forEach(e=>{
-    if(q&&!e.name.includes(q))return;
-    const time=att[e.id],la=isLA(e.id),st=getSt(time);
-    if(st==='ok')tok++;else if(st==='late')tlate++;else tabs++;
-    const avBg=st==='ok'?'var(--okb)':la?'var(--purb)':st==='late'?'var(--lateb)':'var(--absb)';
-    const avCl=st==='ok'?'var(--ok)':la?'var(--pur)':st==='late'?'var(--late)':'var(--abs)';
-    const row=`<div class="row">
-      <div class="av" style="background:${avBg};color:${avCl}">${e.name[0]}</div>
-      <div class="ri">
-        <div class="rn">${e.name}${e.team?` <span class="bdg bblu" style="font-size:10px">${e.team}</span>`:''}
-        ${la?` <span class="bdg bpur" style="font-size:10px">장기결석</span>`:''}</div>
-        <div class="rs">${la?'📋 '+la.reason:time?`<span style="color:#1d4ed8;font-weight:700">${time} 체크인</span><span style="color:#16a34a;font-size:26px;line-height:1;margin-left:4px">✅</span>`:'<span style="color:#ef4444;font-weight:500">미체크</span>'}</div>
-      </div>
-    </div>`;
-    if(st==='ok')ok.push(row);else if(la||st==='abs')abs.push(row);else late.push(row);
-  });
-  if(!q){
-    document.getElementById('today-stats').innerHTML=`
-      <div class="sbox" style="background:linear-gradient(135deg,#1e88e5,#42a5f5)"><div class="snum">${tok}</div><div class="slbl">출석</div></div>
-      <div class="sbox" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)"><div class="snum">${tlate}</div><div class="slbl">지각</div></div>
-      <div class="sbox" style="background:linear-gradient(135deg,#ef4444,#f87171)"><div class="snum">${tabs}</div><div class="slbl">결석</div></div>`;
-  }
-  document.getElementById('cnt-ok').textContent=ok.length+'명';
-  document.getElementById('cnt-late').textContent=late.length+'명';
-  document.getElementById('cnt-abs').textContent=abs.length+'명';
-  const emp='<div class="empty">없음</div>';
-  document.getElementById('list-ok').innerHTML=ok.join('')||emp;
-  document.getElementById('list-late').innerHTML=late.join('')||emp;
-  document.getElementById('list-abs').innerHTML=abs.join('')||emp;
-}
-
-// ── 직원 관리 ──
-function renderEmps(q){
-  const f=employees.filter(e=>!q||e.name.includes(q)||(e.team||'').includes(q));
-  document.getElementById('emp-cnt').textContent=employees.length+'명';
-  document.getElementById('emp-list').innerHTML=f.map(e=>`
-    <div class="row">
-      <div class="av">${e.name[0]}</div>
-      <div class="ri">
-        <div class="rn">${e.name}${e.team?` <span class="bdg bblu" style="font-size:10px">${e.team}</span>`:''}</div>
-        <div class="rs">차량번호: ${e.plate||e.phone}</div>
-      </div>
-      <div style="display:flex;gap:5px">
-        <button class="btn bout bsm" onclick="openEdit('${e.id}')">수정</button>
-        <button class="btn bdel bsm" onclick="rmEmp('${e.id}')">삭제</button>
-      </div>
-    </div>`).join('')||'<div class="empty">직원이 없습니다</div>';
-}
-
-async function addEmp(){
-  const name=document.getElementById('new-name').value.trim();
-  const team=document.getElementById('new-team').value.trim();
-  const plate=document.getElementById('new-plate').value.trim();
-  if(!name){toast('이름을 입력하세요');return;}
-  if(plate.length<4){toast('차량번호 4자리를 입력하세요');return;}
-  if(employees.find(e=>String(e.plate)===plate)){toast('이미 등록된 차량번호입니다');return;}
-  const emp={id:Date.now().toString(),name,team,phone:plate,plate};
-  employees.push(emp);
-  ['new-name','new-team','new-plate'].forEach(id=>document.getElementById(id).value='');
-  renderEmps('');toast(name+'님 추가 완료');
-  try{await api({action:'addEmployee',id:emp.id,name,team,plate});}catch(e){toast('서버 저장 실패');}
-}
-
-async function rmEmp(id){
-  const emp=employees.find(e=>e.id===id);
-  if(!emp||!confirm(emp.name+'님을 삭제할까요?'))return;
-  employees=employees.filter(e=>e.id!==id);
-  renderEmps('');toast('삭제 완료');
-  try{await api({action:'deleteEmployee',id});}catch(e){}
-}
-
-function openEdit(id){
-  const e=employees.find(e=>e.id===id);if(!e)return;
-  document.getElementById('edit-id').value=id;
-  document.getElementById('edit-name').value=e.name;
-  document.getElementById('edit-team').value=e.team||'';
-  document.getElementById('edit-plate').value=e.plate||e.phone||'';
-  document.getElementById('edit-ov').classList.add('on');
-}
-function closeEdit(){document.getElementById('edit-ov').classList.remove('on');}
-async function saveEdit(){
-  const id=document.getElementById('edit-id').value;
-  const name=document.getElementById('edit-name').value.trim();
-  const team=document.getElementById('edit-team').value.trim();
-  const plate=document.getElementById('edit-plate').value.trim();
-  if(!name){toast('이름을 입력하세요');return;}
-  if(plate.length<4){toast('차량번호 4자리를 입력하세요');return;}
-  const emp=employees.find(e=>e.id===id);if(!emp)return;
-  emp.name=name;emp.team=team;emp.phone=plate;emp.plate=plate;
-  closeEdit();renderEmps('');toast(name+'님 수정 완료');
-  try{await api({action:'deleteEmployee',id});await api({action:'addEmployee',id,name,team,plate});}
-  catch(e){toast('서버 저장 실패');}
-}
-
-// ── 통계 계산 ──
-function calcStats(){
-  const mk=monthKey();
-  const days=Object.keys(attendance).filter(d=>d.startsWith(mk));
-  const stats={};
-  employees.forEach(e=>stats[e.id]={name:e.name,team:e.team||'미지정',ok:0,late:0,abs:0});
-  days.forEach(day=>{
-    const att=attendance[day]||{};
-    employees.forEach(e=>{if(stats[e.id])stats[e.id][getSt(att[e.id])]++;});
-  });
-  return {stats,days};
-}
-
-function renderStats(){
-  const {stats}=calcStats();
-  const vals=Object.values(stats);
-  document.getElementById('monthly-list').innerHTML=vals.map(s=>`
-    <div class="row">
-      <div class="av">${s.name[0]}</div>
-      <div class="ri"><div class="rn">${s.name}</div><div class="rs">${s.team}</div></div>
-      <div style="display:flex;gap:5px">
-        <span class="bdg bok">${s.ok}</span><span class="bdg blate">${s.late}</span><span class="bdg babs">${s.abs}</span>
-      </div>
-    </div>`).join('')||'<div class="empty">데이터 없음</div>';
-
-  const lateTop=[...vals].sort((a,b)=>b.late-a.late).slice(0,5).filter(s=>s.late>0);
-  document.getElementById('late-rank').innerHTML=lateTop.map((s,i)=>`
-    <div class="rkrow">
-      <div class="rkn ${i===0?'r1':i===1?'r2':i===2?'r3':''}">${i+1}</div>
-      <div class="ri"><div class="rn">${s.name}</div><div class="rs">${s.team}</div></div>
-      <span class="bdg blate">${s.late}회</span>
-    </div>`).join('')||'<div class="empty">지각자 없음</div>';
-
-  document.getElementById('abs-list').innerHTML=[...vals].filter(s=>s.abs>0).sort((a,b)=>b.abs-a.abs).map(s=>`
-    <div class="row">
-      <div class="av" style="background:var(--absb);color:var(--abs)">${s.name[0]}</div>
-      <div class="ri"><div class="rn">${s.name}</div><div class="rs">${s.team}</div></div>
-      <span class="bdg babs">${s.abs}회</span>
-    </div>`).join('')||'<div class="empty">결석자 없음</div>';
-
-  const td={};
-  vals.forEach(s=>{
-    if(!td[s.team])td[s.team]={late:0,abs:0,cnt:0};
-    td[s.team].late+=s.late;td[s.team].abs+=s.abs;td[s.team].cnt++;
-  });
-  const mkRk=(id,key,cls)=>{
-    document.getElementById(id).innerHTML=Object.entries(td).sort((a,b)=>b[1][key]-a[1][key]).map(([nm,d],i)=>`
-      <div class="rkrow">
-        <div class="rkn ${i===0?'r1':i===1?'r2':i===2?'r3':''}">${i+1}</div>
-        <div class="ri"><div class="rn">${nm}</div><div class="rs">${d.cnt}명</div></div>
-        <span class="bdg ${cls}">${d[key]}회</span>
-      </div>`).join('')||'<div class="empty">데이터 없음</div>';
-  };
-  mkRk('team-late','late','blate');mkRk('team-abs-rank','abs','babs');
-}
-
-// ── 장기결석 ──
-function toggleCustom(){document.getElementById('la-custom').style.display=document.getElementById('la-type').value==='기타'?'block':'none';}
-
-function renderLongAbsTab(){
-  const sel=document.getElementById('la-emp');
-  sel.innerHTML='<option value="">직원을 선택하세요</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.team?' ('+e.team+')':''}</option>`).join('');
-  document.getElementById('la-cnt').textContent=longAbs.length+'건';
-  const today=todayKey();
-  document.getElementById('la-list').innerHTML=longAbs.length?[...longAbs].sort((a,b)=>a.start.localeCompare(b.start)).map(e=>{
-    const active=today>=e.start&&today<=e.end,past=today>e.end;
-    const sl=active?'진행중':past?'종료':'예정';
-    const sc=active?'var(--late)':past?'var(--txt3)':'var(--blu)';
-    const sbg=active?'var(--lateb)':past?'var(--bg)':'var(--blub)';
-    return `<div style="padding:12px 0;border-bottom:.5px solid var(--bdr)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <div class="av" style="width:32px;height:32px;font-size:12px;flex-shrink:0">${e.name[0]}</div>
-          <div>
-            <div class="rn">${e.name}${e.team?` <span class="bdg bblu" style="font-size:10px">${e.team}</span>`:''}</div>
-            <div class="rs">${e.start} ~ ${e.end}</div>
-          </div>
-        </div>
-        <span style="background:${sbg};color:${sc};font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px">${sl}</span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:13px;color:var(--txt2);background:var(--bg);padding:5px 10px;border-radius:8px">📋 ${e.reason}</div>
-        <button onclick="rmLA('${e.id}')" style="font-size:12px;color:var(--abs);background:var(--absb);border:none;padding:5px 10px;border-radius:8px;cursor:pointer">삭제</button>
-      </div>
-    </div>`;
-  }).join(''):'<div class="empty">등록된 장기결석 없음</div>';
-}
-
-async function addLongAbs(){
-  const empId=document.getElementById('la-emp').value;
-  const start=document.getElementById('la-start').value;
-  const end=document.getElementById('la-end').value;
-  const rt=document.getElementById('la-type').value;
-  const rc=document.getElementById('la-custom').value.trim();
-  const reason=rt==='기타'?rc:rt;
-  if(!empId){toast('직원을 선택하세요');return;}
-  if(!start||!end){toast('기간을 입력하세요');return;}
-  if(start>end){toast('종료일이 시작일보다 빠릅니다');return;}
-  if(!reason){toast('사유를 입력하세요');return;}
-  const emp=employees.find(e=>e.id===empId);
-  const entry={id:Date.now().toString(),empId,name:emp.name,team:emp.team||'',start,end,reason};
-  longAbs.push(entry);localStorage.setItem('la',JSON.stringify(longAbs));
-  try{await api({action:'addLongAbs',...entry});}catch(e){toast('서버 저장 실패');}
-  document.getElementById('la-emp').value='';document.getElementById('la-start').value='';
-  document.getElementById('la-end').value='';document.getElementById('la-type').value='';
-  document.getElementById('la-custom').style.display='none';
-  renderLongAbsTab();toast(emp.name+'님 장기결석 등록 완료');
-}
-
-async function rmLA(id){
-  if(!confirm('삭제하시겠습니까?'))return;
-  longAbs=longAbs.filter(e=>e.id!==id);
-  localStorage.setItem('la',JSON.stringify(longAbs));
-  try{await api({action:'deleteLongAbs',id});}catch(e){}
-  renderLongAbsTab();toast('삭제 완료');
-}
-
-// ── 그래프 ──
-function renderCharts(){
-  const {stats}=calcStats();
-  const vals=Object.values(stats);
-  const tok=vals.reduce((s,v)=>s+v.ok,0);
-  const tlate=vals.reduce((s,v)=>s+v.late,0);
-  const tabs=vals.reduce((s,v)=>s+v.abs,0);
-  const total=tok+tlate+tabs||1;
-  const okR=Math.round(tok/total*100);
-  document.getElementById('chart-sum').innerHTML=`
-    <div class="sbox" style="background:linear-gradient(135deg,#1e88e5,#42a5f5)"><div class="snum">${okR}%</div><div class="slbl">출석률</div></div>
-    <div class="sbox" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)"><div class="snum">${tlate}</div><div class="slbl">지각 합계</div></div>
-    <div class="sbox" style="background:linear-gradient(135deg,#ef4444,#f87171)"><div class="snum">${tabs}</div><div class="slbl">결석 합계</div></div>`;
-  drawDonut(tok,tlate,tabs);
-  drawBar14();
-  drawTeamRate(vals);
-  drawHBar('late-bar',vals,'late');
-  drawHBar('abs-bar',vals,'abs');
-}
-
-function drawDonut(ok,late,abs){
-  const cv=document.getElementById('donut'),c=cv.getContext('2d');
-  const total=ok+late+abs||1;
-  const data=[{v:ok,col:'#1e88e5',l:'출석'},{v:late,col:'#f59e0b',l:'지각'},{v:abs,col:'#ef4444',l:'결석'}];
-  c.clearRect(0,0,128,128);
-  let a=-Math.PI/2;
-  data.forEach(d=>{
-    const sw=d.v/total*Math.PI*2;
-    c.beginPath();c.moveTo(64,64);c.arc(64,64,50,a,a+sw);c.closePath();c.fillStyle=d.col;c.fill();a+=sw;
-  });
-  c.beginPath();c.arc(64,64,28,0,Math.PI*2);
-  c.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--sur').trim()||'#fff';c.fill();
-  c.fillStyle='#1a1a1a';c.font='bold 15px sans-serif';c.textAlign='center';c.textBaseline='middle';
-  c.fillText(Math.round(ok/total*100)+'%',64,64);
-  document.getElementById('donut-leg').innerHTML=data.map(d=>`
-    <div style="display:flex;align-items:center;gap:7px;font-size:13px">
-      <div style="width:11px;height:11px;border-radius:3px;background:${d.col};flex-shrink:0"></div>
-      <span style="color:var(--txt2)">${d.l}</span><span style="font-weight:600;color:var(--txt)">${d.v}</span>
-    </div>`).join('');
-}
-
-function drawBar14(){
-  const cv=document.getElementById('bar14'),c=cv.getContext('2d');
-  const days14=[];
-  for(let i=13;i>=0;i--){
-    const d=new Date();d.setDate(d.getDate()-i);
-    const key=d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate());
-    const att=attendance[key]||{};
-    let ok=0,late=0,abs=0;
-    employees.forEach(e=>{const st=getSt(att[e.id]);if(st==='ok')ok++;else if(st==='late')late++;else abs++;});
-    days14.push({l:d.getDate()+'일',ok,late,abs});
-  }
-  const W=cv.parentElement.offsetWidth-8||300;
-  cv.width=Math.max(W,days14.length*24);cv.height=165;
-  c.clearRect(0,0,cv.width,165);
-  const maxV=Math.max(...days14.map(d=>d.ok+d.late+d.abs),1);
-  const bw=Math.max(cv.width/days14.length-5,10);
-  days14.forEach((d,i)=>{
-    const x=i*(cv.width/days14.length)+3;
-    const cH=165-26-6;
-    const okH=d.ok/maxV*cH,lH=d.late/maxV*cH,aH=d.abs/maxV*cH;
-    let y=165-26;
-    c.fillStyle='#1e88e5';c.beginPath();c.roundRect(x,y-okH,bw,okH,[3,3,0,0]);c.fill();y-=okH;
-    c.fillStyle='#f59e0b';c.fillRect(x,y-lH,bw,lH);y-=lH;
-    c.fillStyle='#ef4444';c.fillRect(x,y-aH,bw,aH);
-    c.fillStyle='#999';c.font='9px sans-serif';c.textAlign='center';c.fillText(d.l,x+bw/2,165-5);
-  });
-}
-
-function drawTeamRate(vals){
-  const td={};
-  vals.forEach(s=>{if(!td[s.team])td[s.team]={ok:0,late:0,abs:0,cnt:0};td[s.team].ok+=s.ok;td[s.team].late+=s.late;td[s.team].abs+=s.abs;td[s.team].cnt++;});
-  const el=document.getElementById('team-rate');
-  const teams=Object.entries(td);
-  if(!teams.length){el.innerHTML='<div class="empty">팀 데이터 없음</div>';return;}
-  el.innerHTML=teams.map(([name,d],i)=>{
-    const tot=(d.ok+d.late+d.abs)||1;
-    const okP=Math.round(d.ok/tot*100),lP=Math.round(d.late/tot*100);
-    const col=TC[i%TC.length];
-    return `<div style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px">
-        <span style="display:flex;align-items:center;gap:6px;font-weight:600;color:var(--txt)">
-          <span style="width:9px;height:9px;border-radius:50%;background:${col};display:inline-block"></span>${name}
-        </span>
-        <span style="color:var(--txt2)">${d.cnt}명 · <b style="color:${col}">${okP}%</b></span>
-      </div>
-      <div style="height:13px;border-radius:7px;overflow:hidden;display:flex;background:var(--bg)">
-        <div style="width:${okP}%;background:${col};transition:width .4s"></div>
-        <div style="width:${lP}%;background:#f59e0b"></div>
-        <div style="width:${100-okP-lP}%;background:#ef4444"></div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function drawHBar(id,vals,type){
-  const cv=document.getElementById(id),c=cv.getContext('2d');
-  const lc=['#f59e0b','#fbbf24','#fcd34d','#f97316','#fb923c'];
-  const ac=['#ef4444','#f87171','#ec4899','#a855f7','#8b5cf6'];
-  const cols=type==='late'?lc:ac;
-  const data=[...vals].sort((a,b)=>b[type]-a[type]).slice(0,5).filter(s=>s[type]>0);
-  const W=cv.parentElement.offsetWidth-8||280;
-  cv.width=W;cv.height=145;
-  c.clearRect(0,0,W,145);
-  if(!data.length){c.fillStyle='#aaa';c.font='13px sans-serif';c.textAlign='center';c.fillText('데이터 없음',W/2,73);return;}
-  const maxV=data[0][type]||1,rH=25,lW=58;
-  data.forEach((d,i)=>{
-    const col=cols[i%cols.length],y=i*rH+8;
-    const bMaxW=W-lW-34,bW=d[type]/maxV*bMaxW;
-    c.fillStyle=col+'20';c.beginPath();c.roundRect(lW,y+2,bMaxW,rH-8,4);c.fill();
-    const g=c.createLinearGradient(lW,0,lW+bW,0);g.addColorStop(0,col);g.addColorStop(1,col+'bb');
-    c.fillStyle=g;c.beginPath();c.roundRect(lW,y+2,bW,rH-8,4);c.fill();
-    c.fillStyle=col;c.beginPath();c.arc(lW-19,y+rH/2,7,0,Math.PI*2);c.fill();
-    c.fillStyle='#fff';c.font='bold 8px sans-serif';c.textAlign='center';c.fillText(i+1,lW-19,y+rH/2+3);
-    c.fillStyle='#333';c.font='11px sans-serif';c.textAlign='right';c.fillText(d.name.slice(0,4),lW-30,y+rH/2+4);
-    c.fillStyle=bW>24?'#fff':col;c.font='bold 10px sans-serif';c.textAlign='left';
-    c.fillText(d[type]+'회',bW>24?lW+5:lW+bW+4,y+rH/2+4);
-  });
-}
-
-function printChart(){
-  const now=new Date().toLocaleString('ko-KR');
-  const cvs={};['donut','bar14','late-bar','abs-bar'].forEach(id=>{const e=document.getElementById(id);if(e)cvs[id]=e.toDataURL();});
-  const pw=window.open('','_blank');
-  pw.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>이천물류 출석 통계 보고서</title>
-  <style>body{font-family:"Malgun Gothic",sans-serif;margin:0;padding:20px;color:#1a1a1a;background:#f5f5f5}
-  .hdr{background:#a50034;color:#fff;padding:20px 24px;border-radius:14px;margin-bottom:16px}
-  .hdr h1{margin:0;font-size:20px;font-weight:700}.hdr p{margin:4px 0 0;font-size:12px;opacity:.75}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-  .sbox{border-radius:12px;padding:14px;text-align:center;color:#fff}
-  .snum{font-size:26px;font-weight:700}.slbl{font-size:11px;opacity:.85;margin-top:2px}
-  .card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;page-break-inside:avoid;box-shadow:0 1px 4px rgba(0,0,0,.08)}
-  .ct{font-size:15px;font-weight:600;margin-bottom:10px}img{max-width:100%}</style>
-  </head><body>
-  <div class="hdr"><h1>이천물류 출석 통계 보고서</h1><p>출력일시: ${now}</p></div>
-  <div class="grid">${document.getElementById('chart-sum').innerHTML}</div>
-  <div class="card"><div class="ct">출석률</div><img src="${cvs['donut']}"></div>
-  <div class="card"><div class="ct">최근 14일 현황</div><img src="${cvs['bar14']}"></div>
-  <div class="card"><div class="ct">팀별 출석률</div>${document.getElementById('team-rate').innerHTML}</div>
-  <div class="card"><div class="ct">지각 TOP 5</div><img src="${cvs['late-bar']}"></div>
-  <div class="card"><div class="ct">결석 TOP 5</div><img src="${cvs['abs-bar']}"></div>
-  </body></html>`);
-  pw.document.close();setTimeout(()=>pw.print(),600);
-}
-
-function exportCSV(){
-  const today=todayKey(),att=attendance[today]||{};
-  const d=new Date();
-  const monthLabel=d.getFullYear()+'년 '+p2(d.getMonth()+1)+'월';
-  let csv='\uFEFF['+monthLabel+'] 출석 현황\n이름,팀,차량번호,체크인시간,상태\n';
-  employees.forEach(e=>{
-    const time=att[e.id]||'',st=getSt(time);
-    csv+=e.name+','+(e.team||'')+','+(e.plate||e.phone)+','+time+','+(st==='ok'?'출석':st==='late'?'지각':'결석')+'\n';
-  });
-  const a=document.createElement('a');
-  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download='이천물류_출석_'+monthLabel+'_'+today+'.csv';a.click();
-}
-
-// ── QR코드 (Canvas 직접 생성) ──
-const QR_URL = 'https://je39360-prog.github.io/icheon-attendance/';
-
-function showQR(){
-  document.getElementById('qr-ov').classList.add('on');
-  const div = document.getElementById('qr-div');
-  div.innerHTML = '<div style="color:#aaa;font-size:13px">로딩 중...</div>';
-  if(window.QRCode){
-    div.innerHTML = '';
-    new QRCode(div, {text:QR_URL, width:220, height:220, colorDark:'#000', colorLight:'#fff', correctLevel:QRCode.CorrectLevel.H});
-  } else {
-    const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
-    s.onload = ()=>{
-      div.innerHTML = '';
-      new QRCode(div, {text:QR_URL, width:220, height:220, colorDark:'#000', colorLight:'#fff', correctLevel:QRCode.CorrectLevel.H});
-    };
-    s.onerror = ()=>{
-      div.innerHTML = "<div style='color:#ef4444;font-size:13px;padding:20px'>QR코드 로드 실패<br>인터넷 연결을 확인해주세요</div>";
-    };
-    document.head.appendChild(s);
-  }
-}
-
-function downloadQR(){
-  const img = document.querySelector('#qr-div img, #qr-div canvas');
-  if(!img){ toast('QR코드를 먼저 열어주세요'); return; }
-  const a = document.createElement('a');
-  if(img.tagName==='CANVAS') a.href = img.toDataURL('image/png');
-  else a.href = img.src;
-  a.download = '이천물류_출석체크_QR.png';
-  a.click();
-}
-
-
-// ── 초기화 ──
-loadAll();
-
-if('serviceWorker' in navigator){
-  const sw=`const C='att-v4';self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(['/'])));self.skipWaiting();});self.addEventListener('fetch',e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));});`;
-  navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});
-}
-</script>
-</body>
-</html>
+>
