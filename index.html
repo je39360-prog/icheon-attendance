@@ -110,97 +110,6 @@ input:focus,select:focus{border-color:var(--blu)}
 @media print{.no-print{display:none!important}.atab{display:block!important;overflow:visible!important}}
 </style>
 </head>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    
-    // 1. 실시간 시계 업데이트 기능 (업로드한 HTML의 'h-time' ID와 연동)
-    function updateClock() {
-        const now = new Date();
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        
-        // 기존 HTML에 있는 h-time 요소를 찾아 시간을 기록합니다.
-        const clockElement = document.getElementById('h-time');
-        if (clockElement) {
-            clockElement.textContent = `${hours}:${minutes}:${seconds}`;
-        }
-    }
-
-    // 1초마다 시계 업데이트 실행
-    setInterval(updateClock, 1000);
-    updateClock(); // 로드 즉시 한 번 실행
-
-    // 2. 토스트 팝업 띄우기 함수
-    function showToast(message) {
-        // 기존에 toast 클래스를 가진 요소가 있는지 확인하고, 없으면 생성합니다.
-        let toast = document.querySelector('.toast');
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.className = 'toast';
-            document.body.appendChild(toast);
-        }
-        
-        toast.textContent = message;
-        toast.classList.add('on'); // 업로드된 CSS의 .toast.on 속성 사용
-        
-        // 3초 후 팝업 숨기기
-        setTimeout(() => {
-            toast.classList.remove('on');
-        }, 3000);
-    }
-
-    // 3. 출석 체크 버튼 클릭 이벤트 (버튼 ID가 'btnCheckIn'이라고 가정)
-    // ※ HTML의 출석 버튼 id 속성에 id="btnCheckIn" 을 추가해 주셔야 합니다.
-    const btnCheckIn = document.getElementById('btnCheckIn') || document.querySelector('.brd'); 
-    if (btnCheckIn) {
-        btnCheckIn.addEventListener('click', function() {
-            const now = new Date();
-            const timeString = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-            
-            // 버튼 중복 클릭 방지
-            this.disabled = true;
-            this.style.opacity = '0.5';
-            this.textContent = '처리 중...';
-
-            // 출근 기준 시간 (예: 오전 9시)
-            let status = '정상';
-            let badgeClass = 'bok'; // 기존 CSS의 정상 배지 (.bok)
-            let statusText = '출석';
-            
-            if (now.getHours() >= 9) {
-                status = '지각';
-                badgeClass = 'blate'; // 기존 CSS의 지각 배지 (.blate)
-                statusText = '지각';
-            }
-
-            // 가상의 서버 통신 딜레이 (0.5초) 후 결과 반영
-            setTimeout(() => {
-                showToast(`${timeString} 출석이 완료되었습니다.`);
-                
-                // 출석 기록 리스트에 항목 추가 (기록이 들어갈 컨테이너 ID를 'attendanceHistory'로 가정)
-                const historyList = document.getElementById('attendanceHistory');
-                if (historyList) {
-                    const listItem = document.createElement('div');
-                    listItem.className = 'row'; // 기존 CSS의 .row 속성 사용
-                    listItem.innerHTML = `
-                        <div class="av">나</div>
-                        <div class="ri">
-                            <div class="rn">이천물류센터 <span class="tag">${timeString}</span></div>
-                            <div class="rs">현장 출석</div>
-                        </div>
-                        <span class="bdg ${badgeClass}">${statusText}</span>
-                    `;
-                    historyList.prepend(listItem);
-                }
-
-                // 버튼 상태 복구
-                this.textContent = '출석 완료';
-            }, 500);
-        });
-    }
-});
-</script>
 <body>
 <div class="app">
 
@@ -465,7 +374,7 @@ function p2(n){return String(n).padStart(2,'0');}
 function getSt(t){
   if(!t)return'abs';
   const[h,m]=t.split(':').map(Number);
-  if(h>7||(h===7&&m>=20))return'abs';
+  // CUTOFF(06:50) 이전이면 출석(ok), 이후면 지각(late)으로 판정합니다.
   return(h<CUTOFF.h||(h===CUTOFF.h&&m<CUTOFF.m))?'ok':'late';
 }
 
