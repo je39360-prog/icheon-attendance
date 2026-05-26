@@ -1,18 +1,26 @@
 카운트가 안되는 에러 코드 수정 요청 - Manus
 Lite
-본인의 휴대폰에서만 출석 체크가 가능하도록 기기 인증 로직을 강화했습니다.
-주요 업데이트 내용
-기기 고유 식별 및 자동 등록:
-각 직원이 처음 출석 체크를 시도할 때 사용한 기기를 본인 기기로 자동 등록합니다.
-등록 시 브라우저 정보와 플랫폼 정보를 함께 기록하여 보안성을 높였습니다.
-타 기기 출석 원천 차단:
-이미 등록된 기기가 있는 경우, 다른 휴대폰이나 PC에서 출석을 시도하면 "이미 다른 기기에 등록되어 있습니다"라는 안내와 함께 출석이 차단됩니다.
-대리 출석을 방지하기 위해, 기기 인증(API 호출)에 실패할 경우에도 출석이 진행되지 않도록 안전장치를 추가했습니다.
-사용자 안내 강화:
-기기 차단 팝업 시 관리자에게 문의하라는 안내 문구를 추가하여 기기 변경이 필요한 상황에 대비했습니다.
-수정된 파일을 확인해 보시기 바랍니다. 이제 처음 등록한 본인의 스마트폰 외에는 출석 체크가 불가능합니다.
+요청하신 대로 출석, 지각, 결석의 시간 기준을 수정했습니다.
+수정된 시간 기준
+상태
+기준 시간
+설명
+출석 (OK)
+~ 06:55
+오전 6시 55분 59초까지 체크인 시
+지각 (LATE)
+06:56 ~ 07:20
+오전 7시 20분 59초까지 체크인 시
+결석 (ABSENT)
+07:21 ~
+오전 7시 21분부터 체크인 시
+주요 변경 사항
+CUTOFF 시간을 06:55로 변경했습니다.
+LATE_CUTOFF 기준(07:20)을 새롭게 추가하여, 지각과 결석을 명확히 구분하도록 로직을 업데이트했습니다.
+체크인 기록이 있더라도 오전 7시 21분 이후라면 시스템상에서 '결석'으로 자동 분류됩니다.
+수정된 파일을 첨부해 드립니다. 확인 부탁드립니다.
 이천물류출석체크.html
-코드 · 236.88 KB
+코드 · 237.05 KB
 이 작업의 모든 파일 보기
 작업 완료
 이 결과는 어땠나요?
@@ -387,7 +395,8 @@ input:focus,select:focus{border-color:var(--blu)}
 
 <script>
 const ADMIN_PW='0743';
-const CUTOFF={h:6,m:50};
+const CUTOFF={h:6,m:55};
+const LATE_CUTOFF={h:7,m:20};
 const GAS='https://script.google.com/macros/s/AKfycbwmT898-eltGfNOz7o_6Fl8NiOPjVlAWisys4ie2FZtzLxF4bM__zvJpvB5yao7uIlM/exec';
 const TC=['#1e88e5','#10b981','#8b5cf6','#f59e0b','#ec4899','#14b8a6','#f97316','#6366f1'];
 
@@ -406,8 +415,15 @@ function p2(n){return String(n).padStart(2,'0');}
 function getSt(t){
   if(!t)return'abs';
   const[h,m]=t.split(':').map(Number);
-  // CUTOFF(06:50) 이전이면 출석(ok), 이후면 지각(late)으로 판정합니다.
-  return(h<CUTOFF.h||(h===CUTOFF.h&&m<CUTOFF.m))?'ok':'late';
+  
+  // 1. 출석 판정: CUTOFF(06:55) 이하
+  if(h < CUTOFF.h || (h === CUTOFF.h && m <= CUTOFF.m)) return 'ok';
+  
+  // 2. 지각 판정: LATE_CUTOFF(07:20) 이하
+  if(h < LATE_CUTOFF.h || (h === LATE_CUTOFF.h && m <= LATE_CUTOFF.m)) return 'late';
+  
+  // 3. 그 이후는 결석
+  return 'abs';
 }
 
 // ── 장기결석 여부 ──
